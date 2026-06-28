@@ -365,15 +365,61 @@ export async function resolveMatchedTrackByQualityPreference(id, preferredLevel,
     return requestPromise
 }
 
-export async function resolveTrackWithMatchedFallback(song, preferredLevel, options = {}) {
+export async function resolveTrackWithCustomFallback(song, preferredLevel, options = {}) {
     const playbackId = options.id ?? song?.id
-    const trackInfo = playbackId
-        ? await resolveTrackByQualityPreference(playbackId, preferredLevel, {
-            force: options.force === true,
+    
+    // ==========================================
+    // 1. 流量拦截区：判断是否该强制走第三方源
+    // ==========================================
+    const fee = Number(song?.fee) || 0
+    const isVip = fee === 1 || fee === 4 || song?.vipOnly === true
+    const isRestricted = song?.playable !== undefined && !song.playable
+    
+    // 只要是 VIP 歌曲或者官方无版权，强制走自定义源 (不请求网易云API)
+    if (isVip || isRestricted) {
+        console.log(`[路由拦截] 歌曲(ID:${playbackId}) 触发拦截(VIP:${isVip}, 无版权:${isRestricted}), 强制切换第三方解析源`)
+        const customTrackInfo = await resolveCustomTrackByQualityPreference(song, preferredLevel, {
+            allowDisabled: true
         })
-        : null
-    if (isPlayableTrack(trackInfo) || !hasNoCopyrightAlternativeHint(song)) return trackInfo
-    return resolveMatchedTrackByQualityPreference(song?.id ?? playbackId, preferredLevel, {
-        waitForMetadata: options.waitForMatchedMetadata === true,
+        if (customTrackInfo && customTrackInfo.url) {
+            return customTrackInfo
+        }
+        // 如果第三方也解析失败了，VIP 歌还可以往下走碰碰运气，如果是无版权就没必要走了
+        if (isRestricted) return null
+    }
+
+    // ==========================================
+    // 2. 正常链路区：给普通歌曲准备的 (或者VIP解析失败来碰运气的)
+    // ==========================================
+    let trackInfo = null
+    if (playbackId) {
+        try {
+            trackInfo = await resolveTrackByQualityPreference(playbackId, preferredLevel, {
+                force: options.force === true,
+            })
+        } catch (e) {
+            console.error('官方接口获取URL失败:', e)
+        }
+    }
+
+    // 如果官方返回了数据，我们要防一手“30秒试听骗局”
+    if (trackInfo && trackInfo.url) {
+        // 如果数据里有 freeTrialInfo 或者 fee 不等于 0，且 URL 不是本地路径
+        if (trackInfo.freeTrialInfo) {
+            console.log(`[试听拦截] 官方返回了 30 秒试听片段，强制切换第三方解析源`)
+            const customTrackInfo = await resolveCustomTrackByQualityPreference(song, preferredLevel, {
+                allowDisabled: true
+            })
+            // 如果第三方拿到了完整版，就用第三方的，否则忍痛用官方 30 秒
+            return (customTrackInfo && customTrackInfo.url) ? customTrackInfo : trackInfo
+        }
+        return trackInfo
+    }
+
+    // ==========================================
+    // 3. 终极兜底区
+    // ==========================================
+    return resolveCustomTrackByQualityPreference(song, preferredLevel, {
+        allowDisabled: options.allowDisabled === true,
     })
 }

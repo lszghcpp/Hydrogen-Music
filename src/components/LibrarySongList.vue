@@ -109,8 +109,22 @@ const scheduleRecycleScrollerRefresh = () => {
 const refreshListRuntimeState = () => {
     scheduleRecycleScrollerRefresh()
 }
+
 const isSongDisabled = song => {
-    return shouldBlockRestrictedPlayback(song)
+    // 强制把 fee 转化为数字进行判断（1 是普通 VIP，4 是付费数字专辑）
+    const fee = Number(song?.fee) || 0
+    const isVip = fee === 1 || fee === 4 || song?.vipOnly === true
+    const isNoCopyright = song?.playable !== undefined && !song.playable
+    
+    // 如果存在自定义音源，且当前歌曲是 VIP 或者是无版权，都不禁用！
+    if (customSourceHasSource.value) {
+        if (isVip || isNoCopyright) {
+            return false // 不禁用，让它可以点
+        }
+    }
+    
+    // 如果没有自定义音源，或者不是上述情况，走老逻辑
+    return isNoCopyright && !hasRestrictedPlaybackAlternative(song, customSourceHasSource.value)
 }
 
 watch(scrollerItems, scheduleRecycleScrollerRefresh, { flush: 'post' })
